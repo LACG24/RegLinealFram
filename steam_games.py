@@ -2,20 +2,22 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
-from keras import backend as K
 from numpy.random import seed
-seed(8)
 import tensorflow as tf
 import numpy as np
-from sklearn import datasets, model_selection
-from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
+from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras import regularizers
 import pickle
 from sklearn.metrics import r2_score
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+
+# Configuración de semillas para reproducibilidad
+seed(8)
+np.random.seed(8)
+tf.random.set_seed(8)
 
 def one_hot_encoding(df):
     '''Funcion para co'''
@@ -32,6 +34,7 @@ def scaling(X):
     return new_X
 
 def split(df):
+    """Función para separar el dataset en features y label y en test y train"""
 
     # Se mueve el df de forma aleatoria para eliminar ordenamientos y brindar aleatoriedad
     np.random.seed(42)
@@ -104,20 +107,10 @@ def get_model(input_shape):
     Función que construye un modelo secuencial para un problema de regresión.
     """
     model = Sequential([
-        Dense(64, input_shape=input_shape,  # Número_de_características
-              activation="relu",
-              kernel_regularizer=regularizers.l2(.01),
-              kernel_initializer=tf.keras.initializers.HeUniform(),
-              bias_initializer="ones"),
+        Dense(64, input_shape=input_shape, activation="relu", kernel_regularizer=regularizers.l2(0.01)),
+        Dense(256, activation="relu"),
+        Dropout(0.20),
         Dense(128, activation="relu"),
-        Dense(128, activation="relu"),
-        Dense(128, activation="relu"),
-        Dense(128, activation="relu"),
-        Dense(64, activation="relu"),
-        Dense(64, activation="relu"),
-        Dense(64, activation="relu"),
-        Dense(64, activation="relu"),
-        # Capa de salida para regresión: 1 neurona, activación lineal
         Dense(1, activation="linear")
     ])
     return model
@@ -135,103 +128,160 @@ def train_model(model, train_data, train_targets, epochs):
     """
     Función que entrena el modelo para el número dado de épocas en el
     train_data y train_targets.
-    Su función debería devolver el historial de entrenamiento.
     """
     return model.fit(train_data, train_targets, epochs = epochs, validation_split = 0.15, batch_size = 40)
 
+def cross_val_plot(X_train, y_train, model_type='tree', param_grid=None, n_iter=10, random_state=42):
+    """Funcion para validacion cruzada implementada para arboles ID3 y random forest"""
+    if model_type == 'tree':
+        model = DecisionTreeRegressor(random_state=random_state)
+        search = GridSearchCV(model, param_grid, cv=5, scoring='r2', n_jobs=-1) if param_grid else RandomizedSearchCV(model, param_grid, n_iter=n_iter, cv=5, scoring='r2', n_jobs=-1, random_state=random_state)
+    elif model_type == 'rf':
+        model = RandomForestRegressor(random_state=random_state)
+        search = GridSearchCV(model, param_grid, cv=5, scoring='r2', n_jobs=-1) if param_grid else RandomizedSearchCV(model, param_grid, n_iter=n_iter, cv=5, scoring='r2', n_jobs=-1, random_state=random_state)
+    else:
+        raise ValueError("model_type must be 'tree' or 'rf'")
+
+    try:
+        search.fit(X_train, y_train)
+    except ValueError as e:
+        print(f"Error during model fitting: {e}")
+        return
+
+    results = search.cv_results_
+    mean_scores = results['mean_test_score']
+    params = results['params']
+
+    if model_type == 'tree':
+        mean_scores = np.array(mean_scores).reshape(len(param_grid['max_depth']), len(param_grid['min_samples_split']))
+        plt.figure(figsize=(10, 6))
+        for i, min_samples in enumerate(param_grid['min_samples_split']):
+            plt.plot(param_grid['max_depth'], mean_scores[:, i], marker='o', label=f'min_samples_split={min_samples}')
+        plt.xlabel('max_depth')
+        plt.ylabel('Mean Test R2 Score')
+        plt.title('Validation Curve for Decision Tree')
+        plt.legend()
+    elif model_type == 'rf':
+        mean_scores = np.array(mean_scores).reshape(len(param_grid['n_estimators']),
+                                                     len(param_grid['max_depth']),
+                                                     len(param_grid['max_features']),
+                                                     len(param_grid['min_samples_split']))
+        plt.figure(figsize=(14, 6))
+        for i, n_estimators in enumerate(param_grid['n_estimators']):
+            plt.plot(param_grid['max_depth'], mean_scores[i, :, 0], marker='o', label=f'n_estimators={n_estimators}')
+        plt.xlabel('max_depth')
+        plt.ylabel('Mean Test R² Score')
+        plt.title('Validation Curve for Random Forest')
+        plt.legend()
+
+    plt.show()
 
 def main():
-
-
-    # Se guardan los datos en un dataframe
     df = pd.read_csv('game_data_all.csv')
-
     df = clean_data(df)
-
     X_train, X_test, y_train, y_test = split(df)
-
     X_train = scaling(X_train)
-    X_train.to_numpy()
-    y_train.to_numpy()
-
-
     X_test = scaling(X_test)
-    X_test.to_numpy()
     X_test = X_test.fillna(0)
-    y_test.to_numpy()
-
-    model = get_model(X_train.shape)
-    compile_model(model)
-
-    input_shape = (X_train.shape[1],)  # Número de características
+    
+    input_shape = (X_train.shape[1],)
     model = get_model(input_shape)
     compile_model(model)
-    history = train_model(model, X_train, y_train, epochs=100)
+    
+    max_epochs = 150
+    history = train_model(model, X_train, y_train, epochs=max_epochs)
 
-    # Guardar el historial en un archivo pickle
-    with open('historial_entrenamiento_dos.pkl', 'wb') as f:
-        pickle.dump(history.history, f)
-
-    # Graficar el error (pérdida) vs. épocas
     plt.plot(history.history['loss'], label='Pérdida (Training Loss)')
-    if 'val_loss' in history.history:
-        plt.plot(history.history['val_loss'], label='Pérdida de validación (Validation Loss)')
+    plt.plot(history.history['val_loss'], label='Pérdida de validación (Validation Loss)')
     plt.title('Pérdida vs Épocas')
     plt.xlabel('Épocas')
     plt.ylabel('Pérdida')
     plt.legend()
     plt.show()
 
-
-    # Gráfica de MAE (Mean Absolute Error)
     if 'mae' in history.history:
         plt.plot(history.history['mae'], label='MAE en Entrenamiento (Training MAE)')
-        if 'val_mae' in history.history:
-            plt.plot(history.history['val_mae'], label='MAE de Validación (Validation MAE)')
+        plt.plot(history.history['val_mae'], label='MAE de Validación (Validation MAE)')
         plt.title('Error Absoluto Medio (MAE) vs Épocas')
         plt.xlabel('Épocas')
         plt.ylabel('MAE')
         plt.legend()
         plt.show()
 
-    # Hacer las predicciones para test
-    y_pred = model.predict(X_test)
+    # Red neuronal
+    y_pred_test = model.predict(X_test)
+    r2_test = r2_score(y_test, y_pred_test)
+    
+    val_data = X_train[int(0.85 * len(X_train)):]
+    val_targets = y_train[int(0.85 * len(y_train)):]
+    y_pred_val = model.predict(val_data)
+    r2_val = r2_score(val_targets, y_pred_val)
 
-    # Calcular el R^2
-    r2 = r2_score(y_test, y_pred)
-    print(f"R2: {r2:.4f}")
+    y_pred_train = model.predict(X_train)
+    r2_train = r2_score(y_train, y_pred_train)
 
-    # Obtener las predicciones para el conjunto de validación
-    y_pred_val = model.predict(X_train[int(0.85 * len(X_train)):])
-
-    # Calcular el R^2 para el conjunto de validación
-    r2_val = r2_score(y_train[int(0.85 * len(y_train)):], y_pred_val)
-
-    # Graficar el R^2 para el conjunto de validación y test 
-    plt.figure(figsize=(8, 6))
-    plt.bar(['Validation', 'Test'], [r2_val, r2], color=['skyblue', 'orange']) 
+    plt.figure(figsize=(10, 6))
+    plt.bar(['Training', 'Validation', 'Test'], [r2_train, r2_val, r2_test], color=['skyblue', 'green', 'orange'])
     plt.ylabel('R-squared')
-    plt.title('R-squared para conjuntos de validación y test')
+    plt.title('R-squared para conjuntos de entrenamiento, validación y test (Red neuronal)')
     plt.show()
 
-    print(f"R2 para el conjunto de validación: {r2_val:.4f}")
-    print(f"R2 para el conjunto de prueba: {r2:.4f}")
+    print(f"R2 para el conjunto de entrenamiento (Red neuronal): {r2_train:.4f}")
+    print(f"R2 para el conjunto de validación (Red neuronal): {r2_val:.4f}")
+    print(f"R2 para el conjunto de prueba (Red neuronal): {r2_test:.4f}")
 
-    #ARBOL
+    # Arbol de decisión
+
+    #Hiperparametros
+    '''
+    param_grid_tree = {
+    'max_depth': [3, 5, 7, 10],
+    'min_samples_split': [2, 5, 10]}
+
+    cross_val_plot(X_train, y_train, model_type='tree', param_grid=param_grid_tree)
+    '''
+
     tree_reg = DecisionTreeRegressor(max_depth=10)
     tree_reg.fit(X_train, y_train)
-    y_pred_tree = tree_reg.predict(X_test)
-    print("R2 arbol de decision", r2_score(y_test, y_pred_tree))
 
-    rnd_reg = RandomForestRegressor(n_estimators=400, max_leaf_nodes=10, n_jobs=-1, random_state=42)
+    y_pred_train_tree = tree_reg.predict(X_train)
+    y_pred_val_tree = tree_reg.predict(val_data)
+    y_pred_test_tree = tree_reg.predict(X_test)
+
+    r2_train_tree = r2_score(y_train, y_pred_train_tree)
+    r2_val_tree = r2_score(val_targets, y_pred_val_tree)
+    r2_test_tree = r2_score(y_test, y_pred_test_tree)
+
+    print(f"R2 Arbol de decisión (Entrenamiento): {r2_train_tree:.4f}")
+    print(f"R2 Arbol de decisión (Validación): {r2_val_tree:.4f}")
+    print(f"R2 Arbol de decisión (Prueba): {r2_test_tree:.4f}")
+
+    # Random Forest
+
+    #Hiperparametros
+    '''
+    param_grid_rf = {
+        'n_estimators': [100, 200, 300],
+        'max_depth': [5, 7, 10],
+        'max_features': [0.2, 0.5, 0.9, 'sqrt'],
+        'min_samples_split': [2, 5, 10]}
+    
+    cross_val_plot(X_train, y_train, model_type='rf', param_grid=param_grid_rf)
+    '''
+
+    rnd_reg = RandomForestRegressor(n_estimators=300, max_leaf_nodes=8, n_jobs=-1, random_state=42)
     rnd_reg.fit(X_train, y_train)
 
-    X_test = X_test.fillna(0)
+    y_pred_train_rf = rnd_reg.predict(X_train)
+    y_pred_val_rf = rnd_reg.predict(val_data)
+    y_pred_test_rf = rnd_reg.predict(X_test)
 
+    r2_train_rf = r2_score(y_train, y_pred_train_rf)
+    r2_val_rf = r2_score(val_targets, y_pred_val_rf)
+    r2_test_rf = r2_score(y_test, y_pred_test_rf)
 
-    y_pred_rf= rnd_reg.predict(X_test)
-    print("R2 random forest", r2_score(y_test, y_pred_rf))
-
+    print(f"R2 Random Forest (Entrenamiento): {r2_train_rf:.4f}")
+    print(f"R2 Random Forest (Validación): {r2_val_rf:.4f}")
+    print(f"R2 Random Forest (Prueba): {r2_test_rf:.4f}")
 
 main()
-#Agregar matriz de confusion
