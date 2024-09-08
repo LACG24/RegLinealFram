@@ -8,7 +8,6 @@ import numpy as np
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras import regularizers
-import pickle
 from sklearn.metrics import r2_score
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
@@ -20,7 +19,7 @@ np.random.seed(8)
 tf.random.set_seed(8)
 
 def one_hot_encoding(df):
-    '''Funcion para co'''
+    '''Funcion para separar en diferentes atributos una variable categórica'''
     dummies = pd.get_dummies(df['primary_genre'], dtype=float)
     df = pd.concat([df, dummies], axis=1)
     df.drop('primary_genre', axis=1, inplace=True)
